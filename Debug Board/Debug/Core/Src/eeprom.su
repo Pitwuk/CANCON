@@ -1,0 +1,7 @@
+eeprom.c:60:10:EE_Init	24	static
+eeprom.c:274:10:EE_ReadVariable	32	static
+eeprom.c:333:10:EE_WriteVariable	24	static
+eeprom.c:357:26:EE_Format	8	static
+eeprom.c:393:17:EE_FindValidPage	24	static
+eeprom.c:465:17:EE_VerifyPageFullWriteVariable	32	static
+eeprom.c:525:17:EE_PageTransfer	32	static
