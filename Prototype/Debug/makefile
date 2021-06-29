@@ -65,8 +65,8 @@ all: main-build
 main-build: discovery-test.elf secondary-outputs
 
 # Tool invocations
-discovery-test.elf: $(OBJS) $(USER_OBJS) C:\Users\PLOGDEN\Documents\discovery-test\STM32F407VGTX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
-	arm-none-eabi-gcc -o "discovery-test.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m4 -T"C:\Users\PLOGDEN\Documents\discovery-test\STM32F407VGTX_FLASH.ld" --specs=nosys.specs -Wl,-Map="discovery-test.map" -Wl,--gc-sections -static --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
+discovery-test.elf: $(OBJS) $(USER_OBJS) C:\Users\Public\Documents\SOLIDWORKS\SOLIDWORKS\ PCB\ 2020\CANCON\Code\Prototype\STM32F407VGTX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
+	arm-none-eabi-gcc -o "discovery-test.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m4 -T"C:\Users\Public\Documents\SOLIDWORKS\SOLIDWORKS PCB 2020\CANCON\Code\Prototype\STM32F407VGTX_FLASH.ld" --specs=nosys.specs -Wl,-Map="discovery-test.map" -Wl,--gc-sections -static --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
 	@echo 'Finished building target: $@'
 	@echo ' '
 
