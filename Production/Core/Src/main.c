@@ -50,6 +50,7 @@ SDADC_HandleTypeDef hsdadc2;
 SDADC_HandleTypeDef hsdadc3;
 
 TIM_HandleTypeDef htim2;
+TIM_HandleTypeDef htim3;
 
 /* USER CODE BEGIN PV */
 //CAN VARIABLES
@@ -78,10 +79,18 @@ uint32_t analog_3_offset=0;
 
 uint8_t store_offsets=0;//boolean used to store the offsets
 
-//raw analog data from the sensors
-int32_t raw_1, raw_2, raw_3;
-//adjusted analog data from the sensors
-int32_t a_in_1, a_in_2, a_in_3;
+
+int32_t raw_1, raw_2, raw_3; //raw analog data from the sensors
+int32_t a_in_1, a_in_2, a_in_3; //adjusted analog data from the sensors
+uint8_t a_data_1[2], a_data_2[2], a_data_3[2]; //analog data in a byte array
+uint16_t data_arr_length = 2000;
+uint16_t a_data_arr_1[2000], a_data_arr_2[2000], a_data_arr_3[2000]; // data array of values collected between sends
+uint16_t a_1_index = 0; // index in data array
+uint16_t a_2_index = 0; // index in data array
+uint16_t a_3_index = 0; // index in data array
+uint16_t for_index = 0; // index used in for loops
+uint32_t max = 0; // max index in for loop
+
 
 //DISPLAY VARIABLES
 //menu arrays
@@ -119,6 +128,12 @@ uint8_t byte_arr[4];//used in wordToByte for storing the resulting bytes
 int16_t us = 300;//delay between loops in microseconds
 uint8_t num_delays = 0;//the number of loops in between samples
 
+uint8_t change_value_bool = 0; //boolean for changing the value the selected item
+uint16_t btn_counter=0;//button counter used to debounce buttons
+uint16_t debounce_delay = 1000; // number of delays for debounce
+
+uint8_t debug_val=0;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -129,6 +144,7 @@ static void MX_SDADC1_Init(void);
 static void MX_SDADC2_Init(void);
 static void MX_SDADC3_Init(void);
 static void MX_TIM2_Init(void);
+static void MX_TIM3_Init(void);
 /* USER CODE BEGIN PFP */
 void changeBaudRate(uint8_t direction);
 void setBaudRate(void);
@@ -160,17 +176,8 @@ void calibrateSDADC(SDADC_HandleTypeDef* adc, uint32_t channel);
 int main(void)
 {
   /* USER CODE BEGIN 1 */
-	//booleans to track the state of the buttons
-	uint8_t up_btn_pressed = 0; // up button pressed
-	uint8_t down_btn_pressed = 0; // down button pressed
-	uint8_t sel_btn_pressed = 0; // select button pressed
-	uint8_t change_value_bool = 0; //boolean for changing the value the selected item
-
-	uint8_t a_data_1[2], a_data_2[2], a_data_3[2]; //analog data in a byte array
-
 	//Get variables from Flash Memory
 
-	// retrieve the stored CAN IDs
 	CAN_IDs=(*(__IO uint32_t *) 0x0800F800);
 	memcpy(id_arr, wordToBytes(CAN_IDs), 4);
 	can_id_1=id_arr[0];
@@ -192,6 +199,8 @@ int main(void)
 
 	//get the number of delays between samples
 	num_delays=(uint8_t)(*(__IO uint32_t *) 0x0800F808);
+	if(num_delays<(uint8_t)0)
+		num_delays=0;
 
 	// retrieve the analog enabled booleans
 	enable_word=(*(__IO uint32_t *) 0x0800F80C);
@@ -302,8 +311,9 @@ int main(void)
   MX_SDADC2_Init();
   MX_SDADC3_Init();
   MX_TIM2_Init();
+  MX_TIM3_Init();
   /* USER CODE BEGIN 2 */
-	HAL_TIM_Base_Start(&htim2);// start timer
+  HAL_TIM_Base_Start(&htim2);//start timer
 
 	//initialize LCD
 	lcd_init();
@@ -340,15 +350,28 @@ int main(void)
 	lcd_send_string(strncpy(temp,main_menu[menu_pos+1],16));
 	lcd_put_cur(0,0);
 
-	int analog_counter = 0;//counter used for sampling the analog signals
 	int display_counter=0;//counter used in updating the display
-	int btn_counter=0;//button counter used to reduce double clicks
 	int16_t timer_compensation=0;//compensation for when the operations within the loop take too long
 
 	//calibrate the SDADCs
 	calibrateSDADC(&hsdadc1, SDADC_CHANNEL_1);
 	calibrateSDADC(&hsdadc2, SDADC_CHANNEL_0);
 	calibrateSDADC(&hsdadc3, SDADC_CHANNEL_4);
+	HAL_Delay(300);
+
+	//start ADC conversion interrupts
+	if(analog_1_enabled)
+		HAL_SDADC_Start_IT(&hsdadc1);
+	if(analog_2_enabled)
+		HAL_SDADC_Start_IT(&hsdadc2);
+	if(analog_3_enabled)
+		HAL_SDADC_Start_IT(&hsdadc3);
+
+	// start can timer
+	TIM3->ARR = ((num_delays+1)*us) - 1;
+	HAL_TIM_Base_Start_IT(&htim3);
+
+
 
   /* USER CODE END 2 */
 
@@ -356,293 +379,30 @@ int main(void)
   /* USER CODE BEGIN WHILE */
 	while (1)
 	{
-		__HAL_TIM_SET_COUNTER(&htim2,0); // reset timer
-		//reset display counter (waits 200 delays between updates to the display in the display values menu)
-		if(display_counter>200)
-			display_counter=0;
-		//reset analog counter (waits num_delays delays between samples)
-		if(analog_counter>num_delays)
-			analog_counter=0;
-
-		//get and send analog 1 data
-		if(analog_1_enabled && analog_counter==0){
-			//get raw data for analog 1
-			HAL_SDADC_Start(&hsdadc1);
-			HAL_SDADC_PollForConversion(&hsdadc1, HAL_MAX_DELAY);
-			raw_1 = (int16_t)HAL_SDADC_GetValue(&hsdadc1);
-			raw_1+=32768;
-			//convert and scale raw data
-			a_in_1=(raw_1-analog_1_offset);
-			if(a_in_1<0)
-				a_in_1=0;
-			a_in_1=(uint16_t)(a_in_1*((65535)/(float)(65535-analog_1_offset)));//scale value
-			//put raw data into byte arrays
-			a_data_1[0]=a_in_1 & 0xff;
-			a_data_1[1]=(a_in_1 >> 8);
-			//transmit CAN data for analog 1
-			HAL_CAN_AddTxMessage(&hcan, &headers_1, a_data_1, *tx_mailbox);
-			while (HAL_CAN_IsTxMessagePending(&hcan, *tx_mailbox));//wait until data is sent for analog 1
-		}
-
-		//get and send analog 2 data
-		if(analog_2_enabled&& analog_counter==0){
-			//get raw data for analog 2
-			HAL_SDADC_Start(&hsdadc2);
-			HAL_SDADC_PollForConversion(&hsdadc2, HAL_MAX_DELAY);
-			raw_2 = (int16_t)HAL_SDADC_GetValue(&hsdadc2);
-			raw_2+=32768;
-			//convert and scale raw data
-			a_in_2=(raw_2-analog_2_offset);
-			if(a_in_2<0)
-				a_in_2=0;
-			a_in_2=(uint16_t)(a_in_2*((65535)/(float)(65535-analog_2_offset)));//scale value
-			//put raw data into byte arrays
-			a_data_2[0]=a_in_2 & 0xff;
-			a_data_2[1]=(a_in_2 >> 8);
-			//transmit CAN data for analog 2
-			HAL_CAN_AddTxMessage(&hcan, &headers_2, a_data_2, *tx_mailbox);
-			while (HAL_CAN_IsTxMessagePending(&hcan, *tx_mailbox));//wait until data is sent for analog 2
-		}
-
-		//get and send analog 3 data
-		if(analog_3_enabled&& analog_counter==0){
-			//get raw data for analog 3
-			HAL_SDADC_Start(&hsdadc3);
-			HAL_SDADC_PollForConversion(&hsdadc3, HAL_MAX_DELAY);
-			raw_3 = (int16_t)HAL_SDADC_GetValue(&hsdadc3);
-			raw_3+=32768;
-			//convert and scale raw data
-			a_in_3=(raw_3-analog_3_offset);
-			if(a_in_3<0)
-				a_in_3=0;
-			a_in_3=(uint16_t)(a_in_3*((65535)/(float)(65535-analog_3_offset)));//scale value
-			//put raw data into byte arrays
-			a_data_3[0]=a_in_3 & 0xff;
-			a_data_3[1]=(a_in_3 >> 8);
-			//transmit CAN data for analog 3
-			HAL_CAN_AddTxMessage(&hcan, &headers_3, a_data_3, *tx_mailbox);
-			while (HAL_CAN_IsTxMessagePending(&hcan, *tx_mailbox));//wait until data is sent for analog 3
-		}
-
-
-		//if the up button is pressed
-		if(up_btn_pressed==0 && HAL_GPIO_ReadPin(UP_BTN_GPIO_Port, UP_BTN_Pin)){
-			if(change_value_bool){//if changing a value
-				//change the value of the selected item
-				//main menu changes
-				if(in_main_menu){
-					if(menu_pos==2)
-						display_scroll=(display_scroll==0)?2:(display_scroll-1);//scroll through devices in display values menu
-					if(menu_pos == 3)
-						changeDelay(1);//increment Delay
-				}
-				//can menu changes
-				if(in_can_menu){
-					if(can_pos==1)
-						changeBaudRate(1);//increment baud rate
-					else if(can_pos>=2&&can_pos<=4)
-						changeCANID(1);//increment CAN ID
-				}
-
-			} else {
-				//scroll menu up
-				if(in_main_menu){
-					menu_pos=(menu_pos==0)?main_menu_length-1:(menu_pos-1);//decrement menu position
-					lcd_put_cur(0,0);
-					lcd_send_string(strncpy(temp,main_menu[menu_pos],16));
-					lcd_put_cur(1,0);
-					lcd_send_string(strncpy(temp,main_menu[(menu_pos+1)%main_menu_length],16));
-					lcd_put_cur(0,0);
-				} else if(in_can_menu){
-					can_pos=(can_pos==0)?can_menu_length-1:(can_pos-1);//decrement menu position
-					lcd_put_cur(0,0);
-					lcd_send_string(strncpy(temp,can_menu[can_pos],16));
-					lcd_put_cur(1,0);
-					lcd_send_string(strncpy(temp,can_menu[(can_pos+1)%can_menu_length],16));
-					lcd_put_cur(0,0);
-				} else if(in_analog_menu){
-					analog_pos=(analog_pos==0)?analog_menu_length-1:(analog_pos-1);//decrement menu position
-					lcd_put_cur(0,0);
-					lcd_send_string(strncpy(temp,analog_menu[analog_pos],16));
-					lcd_put_cur(1,0);
-					lcd_send_string(strncpy(temp,analog_menu[(analog_pos+1)%analog_menu_length],16));
-					lcd_put_cur(0,0);
-				}
-			}
-			up_btn_pressed = 1; // set button value to pressed
-			btn_counter=0; // reset button counter
-		} else if ((up_btn_pressed==1 &&!HAL_GPIO_ReadPin(UP_BTN_GPIO_Port, UP_BTN_Pin)&&btn_counter>1000)||(up_btn_pressed==1&&btn_counter>7000)){
-			up_btn_pressed = 0; // reset up button value
-		}
-
-		//if the down button is pressed
-		if(down_btn_pressed==0 && HAL_GPIO_ReadPin(DOWN_BTN_GPIO_Port, DOWN_BTN_Pin)){
-			if(change_value_bool){//if changing a value
-				//change the value of the selected item
-				//main menu changes
-				if(in_main_menu){
-					if(menu_pos==2)
-						display_scroll=(display_scroll+1)%3;//scroll through devices in display values menu
-					if(menu_pos == 3)
-						changeDelay(-1);//decrement Delay
-				}
-				//can menu changes
-				if(in_can_menu){
-					if(can_pos==1)
-						changeBaudRate(-1);//decrement baud rate
-					else if(can_pos>=2&&can_pos<=4)
-						changeCANID(-1);//decrement CAN ID
-				}
-			} else {
-				//scroll menu down
-				if(in_main_menu){
-					menu_pos = (menu_pos+1)%main_menu_length;//increment menu position
-					lcd_put_cur(0,0);
-					lcd_send_string(strncpy(temp,main_menu[menu_pos],16));
-					lcd_put_cur(1,0);
-					lcd_send_string(strncpy(temp,main_menu[(menu_pos+1)%main_menu_length],16));
-					lcd_put_cur(0,0);
-				} else if(in_can_menu){
-					can_pos=(can_pos+1)%can_menu_length;//increment menu position
-					lcd_put_cur(0,0);
-					lcd_send_string(strncpy(temp,can_menu[can_pos],16));
-					lcd_put_cur(1,0);
-					lcd_send_string(strncpy(temp,can_menu[(can_pos+1)%can_menu_length],16));
-					lcd_put_cur(0,0);
-				} else if(in_analog_menu){
-					analog_pos=(analog_pos+1)%analog_menu_length;//increment menu position
-					lcd_put_cur(0,0);
-					lcd_send_string(strncpy(temp,analog_menu[analog_pos],16));
-					lcd_put_cur(1,0);
-					lcd_send_string(strncpy(temp,analog_menu[(analog_pos+1)%analog_menu_length],16));
-					lcd_put_cur(0,0);
-				}
-
-			}
-			down_btn_pressed = 1; // set button value to pressed
-			btn_counter=0;// reset button counter
-		} else if ((down_btn_pressed==1&& !HAL_GPIO_ReadPin(DOWN_BTN_GPIO_Port, DOWN_BTN_Pin)&&btn_counter>1000)||(down_btn_pressed==1&&btn_counter>7000)){
-			down_btn_pressed = 0; // reset up button value
-		}
-
-		//if the select button is pressed
-		if(sel_btn_pressed==0 && HAL_GPIO_ReadPin(SEL_BTN_GPIO_Port, SEL_BTN_Pin)){
-			//set changes and reinitialize can bus
-			if(!change_value_bool){
-				if(in_main_menu){
-					if(menu_pos==0){
-						//display can menu
-						lcd_put_cur(0,0);
-						lcd_send_string(strncpy(temp,can_menu[can_pos],16));
-						lcd_put_cur(1,0);
-						lcd_send_string(strncpy(temp,can_menu[(can_pos+1)%can_menu_length],16));
-						lcd_put_cur(0,0);
-						//update menu booleans
-						in_can_menu=1;
-						in_main_menu=0;
-						change_value_bool=!change_value_bool;//invert change value bool
-					} else if(menu_pos==1){
-						//display can menu
-						lcd_put_cur(0,0);
-						lcd_send_string(strncpy(temp,analog_menu[analog_pos],16));
-						lcd_put_cur(1,0);
-						lcd_send_string(strncpy(temp,analog_menu[(analog_pos+1)%analog_menu_length],16));
-						lcd_put_cur(0,0);
-						//update menu booleans
-						in_analog_menu=1;
-						in_main_menu=0;
-						change_value_bool=!change_value_bool;//invert change value bool
-					} else if (menu_pos==2){
-						display_scroll=0;// reset display value menu position
-					} else if (menu_pos==3){
-						//move cursor for delay change
-						lcd_put_cur(0,13);
-					}
-				} else if((in_can_menu&&can_pos==0)||(in_analog_menu&&analog_pos==0)){// back buttons
-					//display main menu
-					lcd_put_cur(0,0);
-					lcd_send_string(strncpy(temp,main_menu[menu_pos],16));
-					lcd_put_cur(1,0);
-					lcd_send_string(strncpy(temp,main_menu[(menu_pos+1)%main_menu_length],16));
-					lcd_put_cur(0,0);
-					//update menu booleans
-					in_can_menu=0;
-					in_analog_menu=0;
-					in_main_menu=1;
-					change_value_bool=!change_value_bool;//invert change value bool
-				} else if (in_analog_menu){
-					if(analog_pos>=1 && analog_pos<=4){
-						zeroAnalog(analog_pos-1);// set the analog offsets to the current value
-						change_value_bool=!change_value_bool;//invert change value bool
-					}else if(analog_pos>=5 && analog_pos<=7){
-						toggleAnalog(analog_pos-4);
-						change_value_bool=!change_value_bool;//invert change value bool
-					}else if(analog_pos==8){
-						resetOffsets();// reset the analog offsets
-						change_value_bool =!change_value_bool;//invert change value bool
-					}else if(analog_pos==9){
-						store_offsets=1;
-						storeInFlash();// store the analog offsets
-						change_value_bool=!change_value_bool;//invert change value bool
-					}
-
-				} else if (in_can_menu){
-					if(can_pos==5){
-						resetCAN();// reset the CAN options to default
-						change_value_bool=!change_value_bool;//invert change value bool
-					}
-				} else{
-					//move cursor to end
-					lcd_put_cur(0,15);
-				}
-
-			}else{
-				if(in_main_menu){
-					if(menu_pos==2){ //display menu
-						lcd_put_cur(0,0);
-						lcd_send_string(strncpy(temp,main_menu[menu_pos],16));
-						lcd_put_cur(1,0);
-						lcd_send_string(strncpy(temp,main_menu[(menu_pos+1)%main_menu_length],16));
-						lcd_put_cur(0,0);
-					}
-					else if(menu_pos==3)
-						setDelay();//set Delay
-				}
-				else if(in_can_menu){
-					if(can_pos==1)
-						setBaudRate(); // set and store the selected baud rate
-					else if(can_pos>=2 && can_pos<=4)
-						setCANID(); // set and store the selected can id
-				}
-
-			}
-			change_value_bool=!change_value_bool;//invert change value bool
-			sel_btn_pressed=1;//set select button to pressed
-			btn_counter=0;// reset button counter
-		} else if (sel_btn_pressed==1 && !HAL_GPIO_ReadPin(SEL_BTN_GPIO_Port, SEL_BTN_Pin) && btn_counter>1000){
-			sel_btn_pressed = 0; // reset select button value
-		}
-
-		//Display analog values on display
-		if(in_main_menu && menu_pos==2 && change_value_bool && display_counter==0)
-			displayValues();
-
-
-		//increment counters
-		analog_counter++;
-		display_counter++;
-		btn_counter++;
+		//start ADC conversion interrupts
+		if(analog_1_enabled)
+			HAL_SDADC_Start_IT(&hsdadc1);
+		if(analog_2_enabled)
+			HAL_SDADC_Start_IT(&hsdadc2);
+		if(analog_3_enabled)
+			HAL_SDADC_Start_IT(&hsdadc3);
 
 
 		//Delay between samples
-		while ((int16_t)__HAL_TIM_GET_COUNTER(&htim2) < us-timer_compensation-7);
-		//compensation for when operations take longer than the specified delay
-		if((int16_t)__HAL_TIM_GET_COUNTER(&htim2)>us)
-			timer_compensation=((int16_t)__HAL_TIM_GET_COUNTER(&htim2)-us);
-		else if(us-timer_compensation<0) // if the issue wasn't resolved in this loop
-			timer_compensation-=(int16_t)__HAL_TIM_GET_COUNTER(&htim2);
-		else
-			timer_compensation=0;//reset compensation
+		if ((int16_t)__HAL_TIM_GET_COUNTER(&htim2) >= us);
+			__HAL_TIM_SET_COUNTER(&htim2,0); // reset timer
+			//reset display counter (waits 200 delays between updates to the display in the display values menu)
+			if(display_counter>200)
+				display_counter=0;
+
+			//Display analog values on display
+			if(in_main_menu && menu_pos==2 && change_value_bool && display_counter==0)
+				displayValues();
+
+			//increment counters
+			display_counter++;
+			btn_counter++;
+
 
     /* USER CODE END WHILE */
 
@@ -664,9 +424,8 @@ void SystemClock_Config(void)
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
-  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
-  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.HSEState = RCC_HSE_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
@@ -676,9 +435,9 @@ void SystemClock_Config(void)
   */
   RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
                               |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
-  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_HSI;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_HSE;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
-  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
   RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
 
   if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_0) != HAL_OK)
@@ -893,9 +652,9 @@ static void MX_TIM2_Init(void)
 
   /* USER CODE END TIM2_Init 1 */
   htim2.Instance = TIM2;
-  htim2.Init.Prescaler = 8-1;
+  htim2.Init.Prescaler = 16-1;
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim2.Init.Period = 0xffff-1;
+  htim2.Init.Period = 65535;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
@@ -916,6 +675,51 @@ static void MX_TIM2_Init(void)
   /* USER CODE BEGIN TIM2_Init 2 */
 
   /* USER CODE END TIM2_Init 2 */
+
+}
+
+/**
+  * @brief TIM3 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM3_Init(void)
+{
+
+  /* USER CODE BEGIN TIM3_Init 0 */
+
+  /* USER CODE END TIM3_Init 0 */
+
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+
+  /* USER CODE BEGIN TIM3_Init 1 */
+
+  /* USER CODE END TIM3_Init 1 */
+  htim3.Instance = TIM3;
+  htim3.Init.Prescaler = 16-1;
+  htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim3.Init.Period = 300-1;
+  htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim3, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM3_Init 2 */
+
+  /* USER CODE END TIM3_Init 2 */
 
 }
 
@@ -947,13 +751,13 @@ static void MX_GPIO_Init(void)
 
   /*Configure GPIO pin : PA10 */
   GPIO_InitStruct.Pin = GPIO_PIN_10;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /*Configure GPIO pins : PC9 PC6 */
   GPIO_InitStruct.Pin = GPIO_PIN_9|GPIO_PIN_6;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
@@ -978,9 +782,311 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
 
+  /* EXTI interrupt init*/
+  HAL_NVIC_SetPriority(EXTI9_5_IRQn, 3, 0);
+  HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
+
+  HAL_NVIC_SetPriority(EXTI15_10_IRQn, 3, 0);
+  HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
+
 }
 
 /* USER CODE BEGIN 4 */
+//read adc values
+void HAL_SDADC_ConvCpltCallback(SDADC_HandleTypeDef* hsdadc)
+{
+	//get analog 1 data
+	if(hsdadc==&hsdadc1){
+		//get raw data for analog 1
+		raw_1 = (int16_t)HAL_SDADC_GetValue(&hsdadc1);
+		raw_1+=32768;
+		//convert and scale raw data
+		a_in_1=(raw_1-analog_1_offset);
+		if(a_in_1<0)
+			a_in_1=0;
+		a_data_arr_1[a_1_index%data_arr_length]=(uint16_t)(a_in_1*((65535)/(float)(65535-analog_1_offset)));//scale value
+		a_1_index++;
+	}
+
+
+	//get analog 2 data
+	if(hsdadc==&hsdadc2){
+		//get raw data for analog 2
+		raw_2 = (int16_t)HAL_SDADC_GetValue(&hsdadc2);
+		raw_2+=32768;
+		//convert and scale raw data
+		a_in_2=(raw_2-analog_2_offset);
+		if(a_in_2<0)
+			a_in_2=0;
+		a_data_arr_2[a_2_index%data_arr_length]=(uint16_t)(a_in_2*((65535)/(float)(65535-analog_2_offset)));//scale value
+		a_2_index++;
+	}
+
+	//get analog 3 data
+	if(hsdadc==&hsdadc3){
+		//get raw data for analog 3
+		raw_3 = (int16_t)HAL_SDADC_GetValue(&hsdadc3);
+		raw_3+=32768;
+		//convert and scale raw data
+		a_in_3=(raw_3-analog_3_offset);
+		if(a_in_3<0)
+			a_in_3=0;
+		a_data_arr_3[a_3_index%data_arr_length]=(uint16_t)(a_in_3*((65535)/(float)(65535-analog_3_offset)));//scale value
+		a_3_index++;
+	}
+}
+//sends data over can when timer 3 interrupts
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+  // Check which version of the timer triggered this callback
+  if (htim == &htim3)
+  {
+    if(analog_1_enabled){
+    	//average stored values
+    	a_in_1=0;
+    	max = (a_1_index<data_arr_length?a_1_index:data_arr_length);
+    	if(max>0){
+			for(for_index=0; for_index<max; for_index++)
+				a_in_1+=a_data_arr_1[for_index];
+			a_in_1/=max;
+			a_1_index=0;
+    	}
+
+    	//put raw data into byte arrays
+    	a_data_1[0]=a_in_1 & 0xff;
+    	a_data_1[1]=(a_in_1 >> 8);
+    	//transmit CAN data for analog 1
+    	HAL_CAN_AddTxMessage(&hcan, &headers_1, a_data_1, *tx_mailbox);
+    	while (HAL_CAN_IsTxMessagePending(&hcan, *tx_mailbox));//wait until data is sent for analog 1
+    }
+    if(analog_2_enabled){
+    	a_in_2=0;
+		max = (a_2_index<data_arr_length?a_2_index:data_arr_length);
+		if(max>0){
+			for(for_index=0; for_index<max; for_index++)
+				a_in_2+=a_data_arr_2[for_index];
+			a_in_2/=max;
+			a_2_index=0;
+		}
+    	//put raw data into byte arrays
+    	a_data_2[0]=a_in_2 & 0xff;
+    	a_data_2[1]=(a_in_2 >> 8);
+    	//transmit CAN data for analog 2
+    	HAL_CAN_AddTxMessage(&hcan, &headers_2, a_data_2, *tx_mailbox);
+    	while (HAL_CAN_IsTxMessagePending(&hcan, *tx_mailbox));//wait until data is sent for analog 2
+    }
+    if(analog_3_enabled){
+    	a_in_3=0;
+		max = (a_3_index<data_arr_length?a_3_index:data_arr_length);
+		if(max>0){
+			for(for_index=0; for_index<max; for_index++)
+				a_in_3+=a_data_arr_3[for_index];
+			a_in_3/=max;
+			a_3_index=0;
+		}
+		//put raw data into byte arrays
+		a_data_3[0]=a_in_3 & 0xff;
+		a_data_3[1]=(a_in_3 >> 8);
+		//transmit CAN data for analog 3
+		HAL_CAN_AddTxMessage(&hcan, &headers_3, a_data_3, *tx_mailbox);
+		while (HAL_CAN_IsTxMessagePending(&hcan, *tx_mailbox));//wait until data is sent for analog 3
+    }
+  }
+}
+//handles the button interupts
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin){
+	debug_val++;
+	//if the up button is pressed
+			if(GPIO_Pin==UP_BTN_Pin && btn_counter>debounce_delay){
+				if(change_value_bool){//if changing a value
+					//change the value of the selected item
+					//main menu changes
+					if(in_main_menu){
+						if(menu_pos==2)
+							display_scroll=(display_scroll==0)?2:(display_scroll-1);//scroll through devices in display values menu
+						if(menu_pos == 3)
+							changeDelay(1);//increment Delay
+					}
+					//can menu changes
+					if(in_can_menu){
+						if(can_pos==1)
+							changeBaudRate(1);//increment baud rate
+						else if(can_pos>=2&&can_pos<=4)
+							changeCANID(1);//increment CAN ID
+					}
+
+				} else {
+					//scroll menu up
+					if(in_main_menu){
+						menu_pos=(menu_pos==0)?main_menu_length-1:(menu_pos-1);//decrement menu position
+						lcd_put_cur(0,0);
+						lcd_send_string(strncpy(temp,main_menu[menu_pos],16));
+						lcd_put_cur(1,0);
+						lcd_send_string(strncpy(temp,main_menu[(menu_pos+1)%main_menu_length],16));
+						lcd_put_cur(0,0);
+					} else if(in_can_menu){
+						can_pos=(can_pos==0)?can_menu_length-1:(can_pos-1);//decrement menu position
+						lcd_put_cur(0,0);
+						lcd_send_string(strncpy(temp,can_menu[can_pos],16));
+						lcd_put_cur(1,0);
+						lcd_send_string(strncpy(temp,can_menu[(can_pos+1)%can_menu_length],16));
+						lcd_put_cur(0,0);
+					} else if(in_analog_menu){
+						analog_pos=(analog_pos==0)?analog_menu_length-1:(analog_pos-1);//decrement menu position
+						lcd_put_cur(0,0);
+						lcd_send_string(strncpy(temp,analog_menu[analog_pos],16));
+						lcd_put_cur(1,0);
+						lcd_send_string(strncpy(temp,analog_menu[(analog_pos+1)%analog_menu_length],16));
+						lcd_put_cur(0,0);
+					}
+				}
+				btn_counter=0; // reset btn counter
+			}
+
+			//if the down button is pressed
+			else if(GPIO_Pin==DOWN_BTN_Pin && btn_counter>debounce_delay){
+				if(change_value_bool){//if changing a value
+					//change the value of the selected item
+					//main menu changes
+					if(in_main_menu){
+						if(menu_pos==2)
+							display_scroll=(display_scroll+1)%3;//scroll through devices in display values menu
+						if(menu_pos == 3)
+							changeDelay(-1);//decrement Delay
+					}
+					//can menu changes
+					if(in_can_menu){
+						if(can_pos==1)
+							changeBaudRate(-1);//decrement baud rate
+						else if(can_pos>=2&&can_pos<=4)
+							changeCANID(-1);//decrement CAN ID
+					}
+				} else {
+					//scroll menu down
+					if(in_main_menu){
+						menu_pos = (menu_pos+1)%main_menu_length;//increment menu position
+						lcd_put_cur(0,0);
+						lcd_send_string(strncpy(temp,main_menu[menu_pos],16));
+						lcd_put_cur(1,0);
+						lcd_send_string(strncpy(temp,main_menu[(menu_pos+1)%main_menu_length],16));
+						lcd_put_cur(0,0);
+					} else if(in_can_menu){
+						can_pos=(can_pos+1)%can_menu_length;//increment menu position
+						lcd_put_cur(0,0);
+						lcd_send_string(strncpy(temp,can_menu[can_pos],16));
+						lcd_put_cur(1,0);
+						lcd_send_string(strncpy(temp,can_menu[(can_pos+1)%can_menu_length],16));
+						lcd_put_cur(0,0);
+					} else if(in_analog_menu){
+						analog_pos=(analog_pos+1)%analog_menu_length;//increment menu position
+						lcd_put_cur(0,0);
+						lcd_send_string(strncpy(temp,analog_menu[analog_pos],16));
+						lcd_put_cur(1,0);
+						lcd_send_string(strncpy(temp,analog_menu[(analog_pos+1)%analog_menu_length],16));
+						lcd_put_cur(0,0);
+					}
+
+				}
+				btn_counter=0; // reset btn counter
+			}
+
+			//if the select button is pressed
+			else if(GPIO_Pin==SEL_BTN_Pin && btn_counter>debounce_delay){
+				//set changes and reinitialize can bus
+				if(!change_value_bool){
+					if(in_main_menu){
+						if(menu_pos==0){
+							//display can menu
+							lcd_put_cur(0,0);
+							lcd_send_string(strncpy(temp,can_menu[can_pos],16));
+							lcd_put_cur(1,0);
+							lcd_send_string(strncpy(temp,can_menu[(can_pos+1)%can_menu_length],16));
+							lcd_put_cur(0,0);
+							//update menu booleans
+							in_can_menu=1;
+							in_main_menu=0;
+							change_value_bool=!change_value_bool;//invert change value bool
+						} else if(menu_pos==1){
+							//display can menu
+							lcd_put_cur(0,0);
+							lcd_send_string(strncpy(temp,analog_menu[analog_pos],16));
+							lcd_put_cur(1,0);
+							lcd_send_string(strncpy(temp,analog_menu[(analog_pos+1)%analog_menu_length],16));
+							lcd_put_cur(0,0);
+							//update menu booleans
+							in_analog_menu=1;
+							in_main_menu=0;
+							change_value_bool=!change_value_bool;//invert change value bool
+						} else if (menu_pos==2){
+							display_scroll=0;// reset display value menu position
+						} else if (menu_pos==3){
+							//move cursor for delay change
+							lcd_put_cur(0,13);
+						}
+					} else if((in_can_menu&&can_pos==0)||(in_analog_menu&&analog_pos==0)){// back buttons
+						//display main menu
+						lcd_put_cur(0,0);
+						lcd_send_string(strncpy(temp,main_menu[menu_pos],16));
+						lcd_put_cur(1,0);
+						lcd_send_string(strncpy(temp,main_menu[(menu_pos+1)%main_menu_length],16));
+						lcd_put_cur(0,0);
+						//update menu booleans
+						in_can_menu=0;
+						in_analog_menu=0;
+						in_main_menu=1;
+						change_value_bool=!change_value_bool;//invert change value bool
+					} else if (in_analog_menu){
+						if(analog_pos>=1 && analog_pos<=4){
+							zeroAnalog(analog_pos-1);// set the analog offsets to the current value
+							change_value_bool=!change_value_bool;//invert change value bool
+						}else if(analog_pos>=5 && analog_pos<=7){
+							toggleAnalog(analog_pos-4);
+							change_value_bool=!change_value_bool;//invert change value bool
+						}else if(analog_pos==8){
+							resetOffsets();// reset the analog offsets
+							change_value_bool =!change_value_bool;//invert change value bool
+						}else if(analog_pos==9){
+							store_offsets=1;
+							storeInFlash();// store the analog offsets
+							change_value_bool=!change_value_bool;//invert change value bool
+						}
+
+					} else if (in_can_menu){
+						if(can_pos==5){
+							resetCAN();// reset the CAN options to default
+							change_value_bool=!change_value_bool;//invert change value bool
+						}
+					} else{
+						//move cursor to end
+						lcd_put_cur(0,15);
+					}
+
+				}else{
+					if(in_main_menu){
+						if(menu_pos==2){ //display menu
+							lcd_put_cur(0,0);
+							lcd_send_string(strncpy(temp,main_menu[menu_pos],16));
+							lcd_put_cur(1,0);
+							lcd_send_string(strncpy(temp,main_menu[(menu_pos+1)%main_menu_length],16));
+							lcd_put_cur(0,0);
+						}
+						else if(menu_pos==3)
+							setDelay();//set Delay
+					}
+					else if(in_can_menu){
+						if(can_pos==1)
+							setBaudRate(); // set and store the selected baud rate
+						else if(can_pos>=2 && can_pos<=4)
+							setCANID(); // set and store the selected can id
+					}
+
+				}
+				change_value_bool=!change_value_bool;//invert change value bool
+				btn_counter=0; // reset btn counter
+			}
+}
+
+
 //changes the baud rate of the CAN connection
 void changeBaudRate(uint8_t direction){
 	baud_pos = ((baud_pos+direction)<0)?baud_rates_length-1:(baud_pos+direction)%baud_rates_length;//move baud rate position in given direction
@@ -1124,6 +1230,7 @@ void changeDelay(uint16_t direction){
 void setDelay(void){
 	//sore the nmber of delays in flash
 	storeInFlash();
+	TIM3->ARR = ((num_delays+1)*us) - 1;//change CAN interrupt timer period
 
 	//save the delay in microseconds in menu
 	memset(temp,0,17); // erase the temp array

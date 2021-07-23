@@ -60,10 +60,13 @@ void Error_Handler(void);
 /* Private defines -----------------------------------------------------------*/
 #define DOWN_BTN_Pin GPIO_PIN_0
 #define DOWN_BTN_GPIO_Port GPIOA
+#define DOWN_BTN_EXTI_IRQn EXTI0_IRQn
 #define SEL_BTN_Pin GPIO_PIN_1
 #define SEL_BTN_GPIO_Port GPIOA
+#define SEL_BTN_EXTI_IRQn EXTI1_IRQn
 #define UP_BTN_Pin GPIO_PIN_2
 #define UP_BTN_GPIO_Port GPIOA
+#define UP_BTN_EXTI_IRQn EXTI2_TSC_IRQn
 #define DISP_RS_Pin GPIO_PIN_3
 #define DISP_RS_GPIO_Port GPIOA
 #define DISP_RW_Pin GPIO_PIN_4

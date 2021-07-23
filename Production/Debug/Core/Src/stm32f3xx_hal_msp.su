@@ -2,6 +2,6 @@ stm32f3xx_hal_msp.c:64:6:HAL_MspInit	16	static
 stm32f3xx_hal_msp.c:86:6:HAL_CAN_MspInit	48	static
 stm32f3xx_hal_msp.c:122:6:HAL_CAN_MspDeInit	16	static
 stm32f3xx_hal_msp.c:151:6:HAL_SDADC_MspInit	64	static
-stm32f3xx_hal_msp.c:226:6:HAL_SDADC_MspDeInit	16	static
-stm32f3xx_hal_msp.c:288:6:HAL_TIM_Base_MspInit	24	static
-stm32f3xx_hal_msp.c:310:6:HAL_TIM_Base_MspDeInit	16	static
+stm32f3xx_hal_msp.c:235:6:HAL_SDADC_MspDeInit	16	static
+stm32f3xx_hal_msp.c:303:6:HAL_TIM_Base_MspInit	24	static
+stm32f3xx_hal_msp.c:339:6:HAL_TIM_Base_MspDeInit	16	static

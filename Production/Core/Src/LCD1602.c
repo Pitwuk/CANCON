@@ -11,20 +11,20 @@
 
 /*********** Define the LCD PINS below ****************/
 
-#define RS_Pin GPIO_PIN_3
+#define RS_Pin GPIO_PIN_1
 #define RS_GPIO_Port GPIOA
 #define RW_Pin GPIO_PIN_4
 #define RW_GPIO_Port GPIOA
-#define EN_Pin GPIO_PIN_5
+#define EN_Pin GPIO_PIN_7
 #define EN_GPIO_Port GPIOA
-#define D4_Pin GPIO_PIN_6
-#define D4_GPIO_Port GPIOA
-#define D5_Pin GPIO_PIN_0
+#define D4_Pin GPIO_PIN_0
+#define D4_GPIO_Port GPIOB
+#define D5_Pin GPIO_PIN_1
 #define D5_GPIO_Port GPIOB
-#define D6_Pin GPIO_PIN_1
-#define D6_GPIO_Port GPIOB
-#define D7_Pin GPIO_PIN_2
-#define D7_GPIO_Port GPIOB
+#define D6_Pin GPIO_PIN_7
+#define D6_GPIO_Port GPIOE
+#define D7_Pin GPIO_PIN_9
+#define D7_GPIO_Port GPIOE
 
 /****************** define the timer handler below  **************/
 #define timer htim2
@@ -88,7 +88,7 @@ void lcd_send_data (char data)
 void lcd_clear (void)
 {
 	lcd_send_cmd(0x01);
-	HAL_Delay(2);
+	delay(2000);
 }
 
 void lcd_put_cur(int row, int col)
@@ -110,26 +110,26 @@ void lcd_put_cur(int row, int col)
 void lcd_init (void)
 {
 	// 4 bit initialisation
-	HAL_Delay(50);  // wait for >40ms
+	delay(5000);  // wait for >40ms
 	lcd_send_cmd (0x30);
-	HAL_Delay(5);  // wait for >4.1ms
+	delay(5000);  // wait for >4.1ms
 	lcd_send_cmd (0x30);
-	HAL_Delay(1);  // wait for >100us
+	delay(100);  // wait for >100us
 	lcd_send_cmd (0x30);
-	HAL_Delay(10);
+	delay(10000);
 	lcd_send_cmd (0x20);  // 4bit mode
-	HAL_Delay(10);
+	delay(10000);
 
   // dislay initialisation
 	lcd_send_cmd (0x28); // Function set --> DL=0 (4 bit mode), N = 1 (2 line display) F = 0 (5x8 characters)
-	HAL_Delay(1);
+	delay(1000);
 	lcd_send_cmd (0x08); //Display on/off control --> D=0,C=0, B=0  ---> display off
-	HAL_Delay(1);
+	delay(1000);
 	lcd_send_cmd (0x01);  // clear display
-	HAL_Delay(1);
-	HAL_Delay(1);
+	delay(1000);
+	delay(1000);
 	lcd_send_cmd (0x06); //Entry mode set --> I/D = 1 (increment cursor) & S = 0 (no shift)
-	HAL_Delay(1);
+	delay(1000);
 	lcd_send_cmd (0x0F); //Display on/off control --> D = 1, C and B = 0. (Cursor and blink, last two bits)
 }
 
