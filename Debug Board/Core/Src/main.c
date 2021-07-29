@@ -223,6 +223,8 @@ int main(void)
 	headers_1.DLC = sizeof(a_data_1); // set the size of the data
 	headers_1.TransmitGlobalTime = DISABLE; // disable transmission of time
 
+
+
 	// Set the headers for the second analog device
 	headers_2.StdId = can_id_2; // set the CAN ID
 	headers_2.IDE = CAN_ID_STD;
@@ -367,11 +369,14 @@ int main(void)
 	if(analog_3_enabled)
 		HAL_SDADC_Start_IT(&hsdadc3);
 
+
+	uint8_t h = ((&headers_1)->IDE == CAN_ID_STD);
+
+	HAL_CAN_AddTxMessage(&hcan, &headers_1, a_data_1, *tx_mailbox);
+
 	// start can timer
-	TIM3->ARR = ((num_delays+1)*us) - 1;
-	HAL_TIM_Base_Start_IT(&htim3);
-
-
+		TIM3->ARR = ((num_delays+1)*us) - 1;
+		HAL_TIM_Base_Start_IT(&htim3);
 
   /* USER CODE END 2 */
 
@@ -522,7 +527,7 @@ static void MX_SDADC1_Init(void)
   hsdadc1.Init.IdleLowPowerMode = SDADC_LOWPOWER_NONE;
   hsdadc1.Init.FastConversionMode = SDADC_FAST_CONV_DISABLE;
   hsdadc1.Init.SlowClockMode = SDADC_SLOW_CLOCK_DISABLE;
-  hsdadc1.Init.ReferenceVoltage = SDADC_VREF_EXT;
+  hsdadc1.Init.ReferenceVoltage = SDADC_VREF_VDDA;
   if (HAL_SDADC_Init(&hsdadc1) != HAL_OK)
   {
     Error_Handler();
@@ -567,7 +572,7 @@ static void MX_SDADC2_Init(void)
   hsdadc2.Init.IdleLowPowerMode = SDADC_LOWPOWER_NONE;
   hsdadc2.Init.FastConversionMode = SDADC_FAST_CONV_DISABLE;
   hsdadc2.Init.SlowClockMode = SDADC_SLOW_CLOCK_DISABLE;
-  hsdadc2.Init.ReferenceVoltage = SDADC_VREF_EXT;
+  hsdadc2.Init.ReferenceVoltage = SDADC_VREF_VDDA;
   if (HAL_SDADC_Init(&hsdadc2) != HAL_OK)
   {
     Error_Handler();
@@ -612,7 +617,7 @@ static void MX_SDADC3_Init(void)
   hsdadc3.Init.IdleLowPowerMode = SDADC_LOWPOWER_NONE;
   hsdadc3.Init.FastConversionMode = SDADC_FAST_CONV_DISABLE;
   hsdadc3.Init.SlowClockMode = SDADC_SLOW_CLOCK_DISABLE;
-  hsdadc3.Init.ReferenceVoltage = SDADC_VREF_EXT;
+  hsdadc3.Init.ReferenceVoltage = SDADC_VREF_VDDA;
   if (HAL_SDADC_Init(&hsdadc3) != HAL_OK)
   {
     Error_Handler();

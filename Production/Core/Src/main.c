@@ -54,14 +54,15 @@ TIM_HandleTypeDef htim3;
 
 /* USER CODE BEGIN PV */
 //CAN VARIABLES
-uint32_t* tx_mailbox; // Tx Mailbox for CAN messages
+uint32_t *tx_mailbox; // Tx Mailbox for CAN messages
 CAN_FilterTypeDef can_filter; // CAN filter structure
-CAN_TxHeaderTypeDef headers_1, headers_2, headers_3; // CAN headers
+
 uint8_t PSC=2; //Prescaler for CAN Baud
 
 uint8_t can_id_1, can_id_2, can_id_3;//CAN IDs of analog devices
 uint8_t id_arr[4];//array of can ids
 uint32_t *CAN_IDs;//32 bit int of can ids
+CAN_TxHeaderTypeDef headers_1, headers_2, headers_3; // CAN headers
 uint8_t analog_enable_arr[4];// array used to store if analog values are enabled
 uint32_t *enable_word;//32 bit int of enable bools
 char modified_can_id[3];//can id of the can signal being modified
@@ -82,9 +83,10 @@ uint8_t store_offsets=0;//boolean used to store the offsets
 
 int32_t raw_1, raw_2, raw_3; //raw analog data from the sensors
 int32_t a_in_1, a_in_2, a_in_3; //adjusted analog data from the sensors
+int32_t a_in_1_avg, a_in_2_avg, a_in_3_avg; //adjusted analog data from the sensors
 uint8_t a_data_1[2], a_data_2[2], a_data_3[2]; //analog data in a byte array
 uint16_t data_arr_length = 2000;
-uint16_t a_data_arr_1[2000], a_data_arr_2[2000], a_data_arr_3[2000]; // data array of values collected between sends
+uint16_t a_data_arr_1[4096], a_data_arr_2[4096], a_data_arr_3[4096]; // data array of values collected between sends
 uint16_t a_1_index = 0; // index in data array
 uint16_t a_2_index = 0; // index in data array
 uint16_t a_3_index = 0; // index in data array
@@ -128,11 +130,15 @@ uint8_t byte_arr[4];//used in wordToByte for storing the resulting bytes
 int16_t us = 300;//delay between loops in microseconds
 uint8_t num_delays = 0;//the number of loops in between samples
 
-uint8_t change_value_bool = 0; //boolean for changing the value the selected item
-uint16_t btn_counter=0;//button counter used to debounce buttons
+uint8_t change_value_bool = 0; // boolean for changing the value the selected item
+uint8_t up_btn_pressed = 0; // boolean used to debounce buttons
+uint8_t down_btn_pressed = 0;
+uint8_t sel_btn_pressed = 0;
+uint16_t btn_counter=0; // button counter used to debounce buttons
 uint16_t debounce_delay = 1000; // number of delays for debounce
 
-uint8_t debug_val=0;
+uint8_t updating_display = 0; // boolean used for avoiding overwriting during a write to display
+
 
 /* USER CODE END PV */
 
@@ -217,10 +223,10 @@ int main(void)
 
 
 	// Set the headers for the first analog device
-	headers_1.StdId = can_id_1; // set the CAN ID
+	headers_1.StdId = (uint32_t)can_id_1; // set the CAN ID
 	headers_1.IDE = CAN_ID_STD;
 	headers_1.RTR = CAN_RTR_DATA;
-	headers_1.DLC = sizeof(a_data_1); // set the size of the data
+	headers_1.DLC = (uint32_t)sizeof(a_data_1); // set the size of the data
 	headers_1.TransmitGlobalTime = DISABLE; // disable transmission of time
 
 	// Set the headers for the second analog device
@@ -317,6 +323,7 @@ int main(void)
 
 	//initialize LCD
 	lcd_init();
+	lcd_clear();
 	lcd_put_cur(0,0);
 	lcd_send_string("Starting Up...");
 	HAL_Delay(1000);
@@ -354,9 +361,9 @@ int main(void)
 	int16_t timer_compensation=0;//compensation for when the operations within the loop take too long
 
 	//calibrate the SDADCs
-	calibrateSDADC(&hsdadc1, SDADC_CHANNEL_1);
-	calibrateSDADC(&hsdadc2, SDADC_CHANNEL_0);
-	calibrateSDADC(&hsdadc3, SDADC_CHANNEL_4);
+	calibrateSDADC(&hsdadc1, SDADC_CHANNEL_8);
+	calibrateSDADC(&hsdadc2, SDADC_CHANNEL_7);
+	calibrateSDADC(&hsdadc3, SDADC_CHANNEL_8);
 	HAL_Delay(300);
 
 	//start ADC conversion interrupts
@@ -367,11 +374,10 @@ int main(void)
 	if(analog_3_enabled)
 		HAL_SDADC_Start_IT(&hsdadc3);
 
+
 	// start can timer
 	TIM3->ARR = ((num_delays+1)*us) - 1;
-	HAL_TIM_Base_Start_IT(&htim3);
-
-
+	 HAL_TIM_Base_Start_IT(&htim3);
 
   /* USER CODE END 2 */
 
@@ -388,6 +394,7 @@ int main(void)
 			HAL_SDADC_Start_IT(&hsdadc3);
 
 
+
 		//Delay between samples
 		if ((int16_t)__HAL_TIM_GET_COUNTER(&htim2) >= us);
 			__HAL_TIM_SET_COUNTER(&htim2,0); // reset timer
@@ -395,9 +402,21 @@ int main(void)
 			if(display_counter>200)
 				display_counter=0;
 
+
 			//Display analog values on display
 			if(in_main_menu && menu_pos==2 && change_value_bool && display_counter==0)
 				displayValues();
+
+			//unpress buttons
+			if(btn_counter>debounce_delay){
+				if(up_btn_pressed && !HAL_GPIO_ReadPin(UP_BTN_GPIO_Port, UP_BTN_Pin))
+					up_btn_pressed=0;
+				if(down_btn_pressed && !HAL_GPIO_ReadPin(DOWN_BTN_GPIO_Port, DOWN_BTN_Pin))
+					down_btn_pressed=0;
+				if(sel_btn_pressed && !HAL_GPIO_ReadPin(SEL_BTN_GPIO_Port, SEL_BTN_Pin))
+					sel_btn_pressed=0;
+				btn_counter=0;
+			}
 
 			//increment counters
 			display_counter++;
@@ -424,8 +443,9 @@ void SystemClock_Config(void)
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
-  RCC_OscInitStruct.HSEState = RCC_HSE_ON;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
+  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
@@ -435,9 +455,9 @@ void SystemClock_Config(void)
   */
   RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
                               |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
-  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_HSE;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_HSI;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
-  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
   RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
 
   if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_0) != HAL_OK)
@@ -445,7 +465,7 @@ void SystemClock_Config(void)
     Error_Handler();
   }
   PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_SDADC;
-  PeriphClkInit.SdadcClockSelection = RCC_SDADCSYSCLK_DIV4;
+  PeriphClkInit.SdadcClockSelection = RCC_SDADCSYSCLK_DIV2;
   if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK)
   {
     Error_Handler();
@@ -576,7 +596,7 @@ static void MX_SDADC2_Init(void)
   */
   ConfParamStruct.InputMode = SDADC_INPUT_MODE_SE_ZERO_REFERENCE;
   ConfParamStruct.Gain = SDADC_GAIN_1;
-  ConfParamStruct.CommonMode = SDADC_COMMON_MODE_VDDA;
+  ConfParamStruct.CommonMode = SDADC_COMMON_MODE_VSSA;
   ConfParamStruct.Offset = 0;
   if (HAL_SDADC_PrepareChannelConfig(&hsdadc2, SDADC_CONF_INDEX_0, &ConfParamStruct) != HAL_OK)
   {
@@ -613,7 +633,22 @@ static void MX_SDADC3_Init(void)
   hsdadc3.Init.FastConversionMode = SDADC_FAST_CONV_DISABLE;
   hsdadc3.Init.SlowClockMode = SDADC_SLOW_CLOCK_DISABLE;
   hsdadc3.Init.ReferenceVoltage = SDADC_VREF_EXT;
+  hsdadc3.InjectedTrigger = SDADC_SOFTWARE_TRIGGER;
   if (HAL_SDADC_Init(&hsdadc3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /** Configure the Injected Mode
+  */
+  if (HAL_SDADC_SelectInjectedDelay(&hsdadc3, SDADC_INJECTED_DELAY_NONE) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_SDADC_SelectInjectedTrigger(&hsdadc3, SDADC_SOFTWARE_TRIGGER) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_SDADC_InjectedConfigChannel(&hsdadc3, SDADC_CHANNEL_8, SDADC_CONTINUOUS_CONV_ON) != HAL_OK)
   {
     Error_Handler();
   }
@@ -624,6 +659,12 @@ static void MX_SDADC3_Init(void)
   ConfParamStruct.CommonMode = SDADC_COMMON_MODE_VSSA;
   ConfParamStruct.Offset = 0;
   if (HAL_SDADC_PrepareChannelConfig(&hsdadc3, SDADC_CONF_INDEX_0, &ConfParamStruct) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /** Configure the Injected Channel
+  */
+  if (HAL_SDADC_AssociateChannelConfig(&hsdadc3, SDADC_CHANNEL_8, SDADC_CONF_INDEX_0) != HAL_OK)
   {
     Error_Handler();
   }
@@ -652,7 +693,7 @@ static void MX_TIM2_Init(void)
 
   /* USER CODE END TIM2_Init 1 */
   htim2.Instance = TIM2;
-  htim2.Init.Prescaler = 16-1;
+  htim2.Init.Prescaler = 8-1;
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
   htim2.Init.Period = 65535;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
@@ -697,9 +738,9 @@ static void MX_TIM3_Init(void)
 
   /* USER CODE END TIM3_Init 1 */
   htim3.Instance = TIM3;
-  htim3.Init.Prescaler = 16-1;
+  htim3.Init.Prescaler = 8-1;
   htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim3.Init.Period = 300-1;
+  htim3.Init.Period = 65535;
   htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
@@ -733,61 +774,45 @@ static void MX_GPIO_Init(void)
   GPIO_InitTypeDef GPIO_InitStruct = {0};
 
   /* GPIO Ports Clock Enable */
-  __HAL_RCC_GPIOB_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
-  __HAL_RCC_GPIOC_CLK_ENABLE();
-  __HAL_RCC_GPIOF_CLK_ENABLE();
-  __HAL_RCC_GPIOD_CLK_ENABLE();
+  __HAL_RCC_GPIOB_CLK_ENABLE();
   __HAL_RCC_GPIOE_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_1|GPIO_PIN_4|GPIO_PIN_7, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, DISP_RS_Pin|DISP_RW_Pin|DISP_EN_Pin|DISP_D4_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0|GPIO_PIN_1, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, DISP_D5_Pin|DISP_D6_Pin|DISP_D7_Pin, GPIO_PIN_RESET);
 
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOE, GPIO_PIN_7|GPIO_PIN_9, GPIO_PIN_RESET);
-
-  /*Configure GPIO pin : PA10 */
-  GPIO_InitStruct.Pin = GPIO_PIN_10;
+  /*Configure GPIO pins : DOWN_BTN_Pin SEL_BTN_Pin UP_BTN_Pin */
+  GPIO_InitStruct.Pin = DOWN_BTN_Pin|SEL_BTN_Pin|UP_BTN_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : PC9 PC6 */
-  GPIO_InitStruct.Pin = GPIO_PIN_9|GPIO_PIN_6;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
-
-  /*Configure GPIO pins : PA1 PA4 PA7 */
-  GPIO_InitStruct.Pin = GPIO_PIN_1|GPIO_PIN_4|GPIO_PIN_7;
+  /*Configure GPIO pins : DISP_RS_Pin DISP_RW_Pin DISP_EN_Pin DISP_D4_Pin */
+  GPIO_InitStruct.Pin = DISP_RS_Pin|DISP_RW_Pin|DISP_EN_Pin|DISP_D4_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : PB0 PB1 */
-  GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_1;
+  /*Configure GPIO pins : DISP_D5_Pin DISP_D6_Pin DISP_D7_Pin */
+  GPIO_InitStruct.Pin = DISP_D5_Pin|DISP_D6_Pin|DISP_D7_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : PE7 PE9 */
-  GPIO_InitStruct.Pin = GPIO_PIN_7|GPIO_PIN_9;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
-
   /* EXTI interrupt init*/
-  HAL_NVIC_SetPriority(EXTI9_5_IRQn, 3, 0);
-  HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
+  HAL_NVIC_SetPriority(EXTI0_IRQn, 2, 0);
+  HAL_NVIC_EnableIRQ(EXTI0_IRQn);
 
-  HAL_NVIC_SetPriority(EXTI15_10_IRQn, 3, 0);
-  HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
+  HAL_NVIC_SetPriority(EXTI1_IRQn, 2, 0);
+  HAL_NVIC_EnableIRQ(EXTI1_IRQn);
+
+  HAL_NVIC_SetPriority(EXTI2_TSC_IRQn, 2, 0);
+  HAL_NVIC_EnableIRQ(EXTI2_TSC_IRQn);
 
 }
 
@@ -852,12 +877,14 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 			a_1_index=0;
     	}
 
+    	a_in_1_avg=a_in_1;
+
     	//put raw data into byte arrays
     	a_data_1[0]=a_in_1 & 0xff;
     	a_data_1[1]=(a_in_1 >> 8);
     	//transmit CAN data for analog 1
-    	HAL_CAN_AddTxMessage(&hcan, &headers_1, a_data_1, *tx_mailbox);
-    	while (HAL_CAN_IsTxMessagePending(&hcan, *tx_mailbox));//wait until data is sent for analog 1
+    	HAL_CAN_AddTxMessage(&hcan, &headers_1, a_data_1, &tx_mailbox);
+    	while (HAL_CAN_IsTxMessagePending(&hcan, tx_mailbox));//wait until data is sent for analog 1
     }
     if(analog_2_enabled){
     	a_in_2=0;
@@ -868,12 +895,15 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 			a_in_2/=max;
 			a_2_index=0;
 		}
+
+		a_in_2_avg=a_in_2;
+
     	//put raw data into byte arrays
     	a_data_2[0]=a_in_2 & 0xff;
     	a_data_2[1]=(a_in_2 >> 8);
     	//transmit CAN data for analog 2
-    	HAL_CAN_AddTxMessage(&hcan, &headers_2, a_data_2, *tx_mailbox);
-    	while (HAL_CAN_IsTxMessagePending(&hcan, *tx_mailbox));//wait until data is sent for analog 2
+    	HAL_CAN_AddTxMessage(&hcan, &headers_2, a_data_2, &tx_mailbox);
+    	while (HAL_CAN_IsTxMessagePending(&hcan, tx_mailbox));//wait until data is sent for analog 2
     }
     if(analog_3_enabled){
     	a_in_3=0;
@@ -884,20 +914,23 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 			a_in_3/=max;
 			a_3_index=0;
 		}
+
+		a_in_3_avg=a_in_3;
+
 		//put raw data into byte arrays
 		a_data_3[0]=a_in_3 & 0xff;
 		a_data_3[1]=(a_in_3 >> 8);
 		//transmit CAN data for analog 3
-		HAL_CAN_AddTxMessage(&hcan, &headers_3, a_data_3, *tx_mailbox);
-		while (HAL_CAN_IsTxMessagePending(&hcan, *tx_mailbox));//wait until data is sent for analog 3
+		HAL_CAN_AddTxMessage(&hcan, &headers_3, a_data_3, &tx_mailbox);
+		while (HAL_CAN_IsTxMessagePending(&hcan, tx_mailbox));//wait until data is sent for analog 3
     }
   }
 }
 //handles the button interupts
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin){
-	debug_val++;
+	if(!updating_display){
 	//if the up button is pressed
-			if(GPIO_Pin==UP_BTN_Pin && btn_counter>debounce_delay){
+			if(GPIO_Pin==UP_BTN_Pin && !up_btn_pressed){
 				if(change_value_bool){//if changing a value
 					//change the value of the selected item
 					//main menu changes
@@ -941,10 +974,11 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin){
 					}
 				}
 				btn_counter=0; // reset btn counter
+				up_btn_pressed=1; // set up button to pressed
 			}
 
 			//if the down button is pressed
-			else if(GPIO_Pin==DOWN_BTN_Pin && btn_counter>debounce_delay){
+			else if(GPIO_Pin==DOWN_BTN_Pin && !down_btn_pressed){
 				if(change_value_bool){//if changing a value
 					//change the value of the selected item
 					//main menu changes
@@ -988,10 +1022,11 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin){
 
 				}
 				btn_counter=0; // reset btn counter
+				down_btn_pressed=1; // set down button to pressed
 			}
 
 			//if the select button is pressed
-			else if(GPIO_Pin==SEL_BTN_Pin && btn_counter>debounce_delay){
+			else if(GPIO_Pin==SEL_BTN_Pin && !sel_btn_pressed){
 				//set changes and reinitialize can bus
 				if(!change_value_bool){
 					if(in_main_menu){
@@ -1083,7 +1118,9 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin){
 				}
 				change_value_bool=!change_value_bool;//invert change value bool
 				btn_counter=0; // reset btn counter
+				sel_btn_pressed=1; // set select button to pressed
 			}
+	}
 }
 
 
@@ -1328,43 +1365,44 @@ void toggleAnalog(uint8_t analog_id){
 
 //display the analog values on the display
 void displayValues(void){
+	updating_display=1;
 	lcd_put_cur(0,0);
 	if(analog_1_enabled&&analog_2_enabled&&analog_3_enabled){//all 3 devices are enabled
 		if(display_scroll==0){//position 1
 			lcd_send_string("Analog 1:       ");
 			lcd_put_cur(0,11);
 			memset(char_arr, 0, 16);
-			sprintf(char_arr, "%05d", a_in_1);
+			sprintf(char_arr, "%05d", a_in_1_avg);
 			lcd_send_string(char_arr);
 			lcd_put_cur(1,0);
 			lcd_send_string("Analog 2:       ");
 			lcd_put_cur(1,11);
 			memset(char_arr, 0, 16);
-			sprintf(char_arr, "%05d", a_in_2);
+			sprintf(char_arr, "%05d", a_in_2_avg);
 			lcd_send_string(char_arr);
 		}else if(display_scroll==1){//position 2
 			lcd_send_string("Analog 2:       ");
 			lcd_put_cur(0,11);
 			memset(char_arr, 0, 16);
-			sprintf(char_arr, "%05d", a_in_2);
+			sprintf(char_arr, "%05d", a_in_2_avg);
 			lcd_send_string(char_arr);
 			lcd_put_cur(1,0);
 			lcd_send_string("Analog 3:       ");
 			lcd_put_cur(1,11);
 			memset(char_arr, 0, 16);
-			sprintf(char_arr, "%05d", a_in_3);
+			sprintf(char_arr, "%05d", a_in_3_avg);
 			lcd_send_string(char_arr);
 		}else {//position 3
 			lcd_send_string("Analog 3:       ");
 			lcd_put_cur(0,11);
 			memset(char_arr, 0, 16);
-			sprintf(char_arr, "%05d", a_in_3);
+			sprintf(char_arr, "%05d", a_in_3_avg);
 			lcd_send_string(char_arr);
 			lcd_put_cur(1,0);
 			lcd_send_string("Analog 1:       ");
 			lcd_put_cur(1,11);
 			memset(char_arr, 0, 16);
-			sprintf(char_arr, "%05d", a_in_1);
+			sprintf(char_arr, "%05d", a_in_1_avg);
 			lcd_send_string(char_arr);
 		}
 
@@ -1373,20 +1411,26 @@ void displayValues(void){
 			lcd_send_string("Analog 1:       ");
 			lcd_put_cur(0,11);
 			memset(char_arr, 0, 16);
-			sprintf(char_arr, "%05d", a_in_1);
+			sprintf(char_arr, "%05d", a_in_1_avg);
 			lcd_send_string(char_arr);
+			lcd_put_cur(1,0);
+			lcd_send_string("                ");
 		} else if(analog_2_enabled){//display device 2 on first line
 			lcd_send_string("Analog 2:       ");
 			lcd_put_cur(0,11);
 			memset(char_arr, 0, 16);
-			sprintf(char_arr, "%05d", a_in_2);
+			sprintf(char_arr, "%05d", a_in_2_avg);
 			lcd_send_string(char_arr);
+			lcd_put_cur(1,0);
+			lcd_send_string("                ");
 		} else if(analog_3_enabled){//display device 3 on first line
 			lcd_send_string("Analog 3:       ");
 			lcd_put_cur(0,11);
 			memset(char_arr, 0, 16);
-			sprintf(char_arr, "%05d", a_in_3);
+			sprintf(char_arr, "%05d", a_in_3_avg);
 			lcd_send_string(char_arr);
+			lcd_put_cur(1,0);
+			lcd_send_string("                ");
 		} else{//display no devices enabled
 			lcd_send_string("No Devices      ");
 			lcd_put_cur(1,0);
@@ -1399,17 +1443,18 @@ void displayValues(void){
 			lcd_send_string("Analog 2:       ");
 			lcd_put_cur(1,11);
 			memset(char_arr, 0, 16);
-			sprintf(char_arr, "%05d", a_in_2);
+			sprintf(char_arr, "%05d", a_in_2_avg);
 			lcd_send_string(char_arr);
 		} else if((analog_1_enabled&&analog_3_enabled)||(analog_2_enabled&&analog_3_enabled)){//display device 3 on second line
 			lcd_put_cur(1,0);
 			lcd_send_string("Analog 3:       ");
 			lcd_put_cur(1,11);
 			memset(char_arr, 0, 16);
-			sprintf(char_arr, "%05d", a_in_3);
+			sprintf(char_arr, "%05d", a_in_3_avg);
 			lcd_send_string(char_arr);
 		}
 	}
+	updating_display=0;
 }
 
 
