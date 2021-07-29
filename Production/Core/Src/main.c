@@ -62,6 +62,7 @@ uint8_t PSC=2; //Prescaler for CAN Baud
 uint8_t can_id_1, can_id_2, can_id_3;//CAN IDs of analog devices
 uint8_t id_arr[4];//array of can ids
 uint32_t *CAN_IDs;//32 bit int of can ids
+uint8_t can_enabled = 1;// can enable bool
 CAN_TxHeaderTypeDef headers_1, headers_2, headers_3; // CAN headers
 uint8_t analog_enable_arr[4];// array used to store if analog values are enabled
 uint32_t *enable_word;//32 bit int of enable bools
@@ -96,7 +97,7 @@ uint32_t max = 0; // max index in for loop
 
 //DISPLAY VARIABLES
 //menu arrays
-char main_menu[4][17] = {"CAN Bus Config  ", "Analog Config   ", "Display Values  ", "Delay:          "};
+char main_menu[4][17] = {"CAN Bus Config  ", "Analog Config   ", "Display Values  ", "Rate:    3333sps"};
 char can_menu[6][17] = {"Back            ", "Baud rate:      ", "CAN ID 1:    001", "CAN ID 2:    002", "CAN ID 3:    003", "Reset CAN Config"};
 char analog_menu[10][17] = {"Back            ", "Zero All        ", "Zero Analog 1   ", "Zero Analog 2    ", "Zero Analog 3    ", "Analog 1:     ON",
 		"Analog 2:     ON", "Analog 3:     ON", "Reset Offsets   ", "Store Offsets   "};
@@ -127,8 +128,9 @@ int8_t baud_pos = 3; //baud_rate array position
 //MISC VARIABLES
 uint8_t byte_arr[4];//used in wordToByte for storing the resulting bytes
 
-int16_t us = 300;//delay between loops in microseconds
+int16_t us = 100;//delay between loops in microseconds
 uint8_t num_delays = 0;//the number of loops in between samples
+uint16_t sample_rate = 10; // the sample rate of the can transmisions
 
 uint8_t change_value_bool = 0; // boolean for changing the value the selected item
 uint8_t up_btn_pressed = 0; // boolean used to debounce buttons
@@ -204,9 +206,9 @@ int main(void)
 	PSC=pow(2,4-baud_pos);//set prescaler
 
 	//get the number of delays between samples
-	num_delays=(uint8_t)(*(__IO uint32_t *) 0x0800F808);
-	if(num_delays<(uint8_t)0)
-		num_delays=0;
+	sample_rate=(uint16_t)(*(__IO uint32_t *) 0x0800F808);
+	if(sample_rate<(uint16_t)10 || sample_rate>(uint16_t)10000)
+		sample_rate=3000;
 
 	// retrieve the analog enabled booleans
 	enable_word=(*(__IO uint32_t *) 0x0800F80C);
@@ -215,6 +217,14 @@ int main(void)
 	analog_1_enabled=!analog_enable_arr[0];
 	analog_2_enabled=!analog_enable_arr[1];
 	analog_3_enabled=!analog_enable_arr[2];
+
+	//sample rate cap
+	if(sample_rate<30||(analog_1_enabled && analog_2_enabled && analog_3_enabled && sample_rate > 3000/(log(PSC)/log(2)))||(((analog_1_enabled&&analog_2_enabled)||(analog_1_enabled&&analog_3_enabled)||(analog_2_enabled&&analog_3_enabled))&& sample_rate>5000/(log(PSC)/log(2)))||(sample_rate>10000/(log(PSC)/log(2)))){
+		sample_rate=(analog_1_enabled && analog_2_enabled && analog_3_enabled)?3000:((analog_1_enabled&&analog_2_enabled)||(analog_1_enabled&&analog_3_enabled)||(analog_2_enabled&&analog_3_enabled))?5000:10000;
+		sample_rate/=(log(PSC)/log(2));
+	}
+
+
 
 	//get the offsets
 	analog_1_offset=(*(__IO uint32_t *) 0x0800F810);
@@ -276,13 +286,13 @@ int main(void)
 	strlcat(temp, char_arr,17);
 	memcpy(can_menu[4],temp,17);
 
-	//Delay
+	//Sample rate
 	memset(temp,0,17); // erase the temp array
-	strncpy(temp, "Delay:   ",16); // copy the string to the temp array (limiting the length to 16 characters)
+	strncpy(temp, "Rate:   ",16); // copy the string to the temp array (limiting the length to 16 characters)
 	memset(char_arr, 0, 16);
-	sprintf(char_arr, "%05d", us*(num_delays+1));
+	sprintf(char_arr, "%05d", sample_rate);
 	strcat(temp, char_arr);
-	strlcat(temp,"us",17);
+	strlcat(temp,"sps",17);
 	memcpy(main_menu[3],temp,17);
 
 	//Analog enabled bools
@@ -358,7 +368,6 @@ int main(void)
 	lcd_put_cur(0,0);
 
 	int display_counter=0;//counter used in updating the display
-	int16_t timer_compensation=0;//compensation for when the operations within the loop take too long
 
 	//calibrate the SDADCs
 	calibrateSDADC(&hsdadc1, SDADC_CHANNEL_8);
@@ -376,8 +385,8 @@ int main(void)
 
 
 	// start can timer
-	TIM3->ARR = ((num_delays+1)*us) - 1;
-	 HAL_TIM_Base_Start_IT(&htim3);
+	TIM3->ARR = (uint32_t)(((float)1/sample_rate)*1000000) - 1;
+	HAL_TIM_Base_Start_IT(&htim3);
 
   /* USER CODE END 2 */
 
@@ -395,11 +404,11 @@ int main(void)
 
 
 
-		//Delay between samples
-		if ((int16_t)__HAL_TIM_GET_COUNTER(&htim2) >= us);
+		//Delay between counter increments
+		if ((int16_t)__HAL_TIM_GET_COUNTER(&htim2) >= us){
 			__HAL_TIM_SET_COUNTER(&htim2,0); // reset timer
 			//reset display counter (waits 200 delays between updates to the display in the display values menu)
-			if(display_counter>200)
+			if(display_counter>1000)
 				display_counter=0;
 
 
@@ -421,6 +430,7 @@ int main(void)
 			//increment counters
 			display_counter++;
 			btn_counter++;
+		}
 
 
     /* USER CODE END WHILE */
@@ -446,7 +456,9 @@ void SystemClock_Config(void)
   RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
   RCC_OscInitStruct.HSIState = RCC_HSI_ON;
   RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
-  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
+  RCC_OscInitStruct.PLL.PLLMUL = RCC_PLL_MUL16;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
     Error_Handler();
@@ -455,17 +467,17 @@ void SystemClock_Config(void)
   */
   RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
                               |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
-  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_HSI;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
-  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
   RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
 
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_0) != HAL_OK)
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
   {
     Error_Handler();
   }
   PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_SDADC;
-  PeriphClkInit.SdadcClockSelection = RCC_SDADCSYSCLK_DIV2;
+  PeriphClkInit.SdadcClockSelection = RCC_SDADCSYSCLK_DIV12;
   if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK)
   {
     Error_Handler();
@@ -494,8 +506,8 @@ static void MX_CAN_Init(void)
   hcan.Init.Prescaler = 2;
   hcan.Init.Mode = CAN_MODE_NORMAL;
   hcan.Init.SyncJumpWidth = CAN_SJW_1TQ;
-  hcan.Init.TimeSeg1 = CAN_BS1_2TQ;
-  hcan.Init.TimeSeg2 = CAN_BS2_1TQ;
+  hcan.Init.TimeSeg1 = CAN_BS1_8TQ;
+  hcan.Init.TimeSeg2 = CAN_BS2_7TQ;
   hcan.Init.TimeTriggeredMode = DISABLE;
   hcan.Init.AutoBusOff = DISABLE;
   hcan.Init.AutoWakeUp = DISABLE;
@@ -693,7 +705,7 @@ static void MX_TIM2_Init(void)
 
   /* USER CODE END TIM2_Init 1 */
   htim2.Instance = TIM2;
-  htim2.Init.Prescaler = 8-1;
+  htim2.Init.Prescaler = 64-1;
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
   htim2.Init.Period = 65535;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
@@ -738,7 +750,7 @@ static void MX_TIM3_Init(void)
 
   /* USER CODE END TIM3_Init 1 */
   htim3.Instance = TIM3;
-  htim3.Init.Prescaler = 8-1;
+  htim3.Init.Prescaler = 64-1;
   htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
   htim3.Init.Period = 65535;
   htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
@@ -805,13 +817,13 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /* EXTI interrupt init*/
-  HAL_NVIC_SetPriority(EXTI0_IRQn, 2, 0);
+  HAL_NVIC_SetPriority(EXTI0_IRQn, 3, 0);
   HAL_NVIC_EnableIRQ(EXTI0_IRQn);
 
-  HAL_NVIC_SetPriority(EXTI1_IRQn, 2, 0);
+  HAL_NVIC_SetPriority(EXTI1_IRQn, 3, 0);
   HAL_NVIC_EnableIRQ(EXTI1_IRQn);
 
-  HAL_NVIC_SetPriority(EXTI2_TSC_IRQn, 2, 0);
+  HAL_NVIC_SetPriority(EXTI2_TSC_IRQn, 3, 0);
   HAL_NVIC_EnableIRQ(EXTI2_TSC_IRQn);
 
 }
@@ -864,7 +876,7 @@ void HAL_SDADC_ConvCpltCallback(SDADC_HandleTypeDef* hsdadc)
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
   // Check which version of the timer triggered this callback
-  if (htim == &htim3)
+  if (htim == &htim3 && can_enabled)
   {
     if(analog_1_enabled){
     	//average stored values
@@ -884,7 +896,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
     	a_data_1[1]=(a_in_1 >> 8);
     	//transmit CAN data for analog 1
     	HAL_CAN_AddTxMessage(&hcan, &headers_1, a_data_1, &tx_mailbox);
-    	while (HAL_CAN_IsTxMessagePending(&hcan, tx_mailbox));//wait until data is sent for analog 1
+    	//while (HAL_CAN_IsTxMessagePending(&hcan, tx_mailbox));//wait until data is sent for analog 1
     }
     if(analog_2_enabled){
     	a_in_2=0;
@@ -903,7 +915,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
     	a_data_2[1]=(a_in_2 >> 8);
     	//transmit CAN data for analog 2
     	HAL_CAN_AddTxMessage(&hcan, &headers_2, a_data_2, &tx_mailbox);
-    	while (HAL_CAN_IsTxMessagePending(&hcan, tx_mailbox));//wait until data is sent for analog 2
+    	//while (HAL_CAN_IsTxMessagePending(&hcan, tx_mailbox));//wait until data is sent for analog 2
     }
     if(analog_3_enabled){
     	a_in_3=0;
@@ -922,7 +934,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 		a_data_3[1]=(a_in_3 >> 8);
 		//transmit CAN data for analog 3
 		HAL_CAN_AddTxMessage(&hcan, &headers_3, a_data_3, &tx_mailbox);
-		while (HAL_CAN_IsTxMessagePending(&hcan, tx_mailbox));//wait until data is sent for analog 3
+		//while (HAL_CAN_IsTxMessagePending(&hcan, tx_mailbox));//wait until data is sent for analog 3
     }
   }
 }
@@ -1083,6 +1095,9 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin){
 						}else if(analog_pos==9){
 							store_offsets=1;
 							storeInFlash();// store the analog offsets
+							lcd_put_cur(0,0);
+								lcd_send_string("Store Successful");
+								lcd_put_cur(0,15);
 							change_value_bool=!change_value_bool;//invert change value bool
 						}
 
@@ -1090,6 +1105,9 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin){
 						if(can_pos==5){
 							resetCAN();// reset the CAN options to default
 							change_value_bool=!change_value_bool;//invert change value bool
+						} else {
+							//move cursor to end
+							lcd_put_cur(0,15);
 						}
 					} else{
 						//move cursor to end
@@ -1136,11 +1154,20 @@ void changeBaudRate(uint8_t direction){
 
 //set the baud rate and store it
 void setBaudRate(void){
+	can_enabled=0;
 	//stop can bus
 	HAL_CAN_Stop(&hcan);
 
 	//set prescaler
 	PSC=pow(2,4-baud_pos);
+
+	//sample rate cap
+	if(sample_rate<30||(analog_1_enabled && analog_2_enabled && analog_3_enabled && sample_rate > 3000/(log(PSC)/log(2)))||(((analog_1_enabled&&analog_2_enabled)||(analog_1_enabled&&analog_3_enabled)||(analog_2_enabled&&analog_3_enabled))&& sample_rate>5000/(log(PSC)/log(2)))||(sample_rate>10000/(log(PSC)/log(2)))){
+		sample_rate=(analog_1_enabled && analog_2_enabled && analog_3_enabled)?3000:((analog_1_enabled&&analog_2_enabled)||(analog_1_enabled&&analog_3_enabled)||(analog_2_enabled&&analog_3_enabled))?5000:10000;
+		sample_rate/=(log(PSC)/log(2));
+		setDelay();
+	}
+
 	hcan.Init.Prescaler = PSC;
 
 	//reinitialize can
@@ -1154,6 +1181,7 @@ void setBaudRate(void){
 		Error_Handler();
 	}
 
+
 	//store new baud in flash
 	storeInFlash();
 
@@ -1163,6 +1191,8 @@ void setBaudRate(void){
 	strlcat(temp,baud_rates[baud_pos],17);
 	strlcpy(can_menu[1],temp,17);
 	lcd_put_cur(0,0);
+
+	can_enabled=1;
 }
 
 //changes the ID of the selected can device
@@ -1249,16 +1279,31 @@ void resetCAN(void){
 	//reset baud rate to 1M
 	baud_pos=3;
 	setBaudRate();
+
+	lcd_put_cur(0,0);
+	lcd_send_string("Reset Successful");
+	lcd_put_cur(0,15);
 }
 
 //change the number of delays between samples
 void changeDelay(uint16_t direction){
-	num_delays+=direction;//move num_delays in given direction
+
+	if(direction==1)
+		sample_rate+=(sample_rate>=1000)?direction*1000:(sample_rate>=100)?direction*100:direction*10;//move sample rate in positive direction
+	else
+		sample_rate+=(sample_rate>1000)?direction*1000:(sample_rate>100)?direction*100:direction*10;//move sample rate in negative direction
+	//sample rate cap
+	if((analog_1_enabled && analog_2_enabled && analog_3_enabled && sample_rate > 3000/(log(PSC)/log(2)))||(((analog_1_enabled&&analog_2_enabled)||(analog_1_enabled&&analog_3_enabled)||(analog_2_enabled&&analog_3_enabled))&& sample_rate>5000/(log(PSC)/log(2)))||(sample_rate>10000/(log(PSC)/log(2)))){
+		sample_rate=30;
+	} else if(sample_rate<30){
+		sample_rate=(analog_1_enabled && analog_2_enabled && analog_3_enabled)?3000:((analog_1_enabled&&analog_2_enabled)||(analog_1_enabled&&analog_3_enabled)||(analog_2_enabled&&analog_3_enabled))?5000:10000;
+		sample_rate/=(log(PSC)/log(2));
+	}
 
 	//display new delay in microseconds
-	lcd_put_cur(0,9);
+	lcd_put_cur(0,8);
 	char temp_arr[5];
-	sprintf(temp_arr, "%05d", us*(num_delays+1));
+	sprintf(temp_arr, "%05d", sample_rate);
 	lcd_send_string(temp_arr);
 	lcd_put_cur(0,13);
 }
@@ -1267,15 +1312,15 @@ void changeDelay(uint16_t direction){
 void setDelay(void){
 	//sore the nmber of delays in flash
 	storeInFlash();
-	TIM3->ARR = ((num_delays+1)*us) - 1;//change CAN interrupt timer period
+	TIM3->ARR = (uint32_t)(((double)1/sample_rate)*1000000) - 1;//change CAN interrupt timer period
 
 	//save the delay in microseconds in menu
 	memset(temp,0,17); // erase the temp array
-	strncpy(temp, "Delay:   ",16);
+	strncpy(temp, "Rate:   ",16);
 	memset(char_arr, 0, 16);
-	sprintf(char_arr, "%05d", us*(num_delays+1));
+	sprintf(char_arr, "%05d", sample_rate);
 	strcat(temp, char_arr);
-	strlcat(temp,"us",17);
+	strlcat(temp,"sps",17);
 	memcpy(main_menu[3],temp,17);
 	lcd_put_cur(0,0);
 }
@@ -1292,6 +1337,10 @@ void zeroAnalog(uint8_t analog_id){
 		analog_2_offset = raw_2;
 	else if(analog_id==3)//zero 3
 		analog_3_offset = raw_3;
+
+	lcd_put_cur(0,0);
+	lcd_send_string("Zero Successful ");
+	lcd_put_cur(0,15);
 }
 
 //resets all analog offsets to 0 and stores it in flash
@@ -1303,6 +1352,10 @@ void resetOffsets(void){
 	store_offsets=1;
 
 	storeInFlash();
+
+	lcd_put_cur(0,0);
+	lcd_send_string("Reset Successful");
+	lcd_put_cur(0,15);
 }
 
 //turns the analog device on or off
@@ -1331,6 +1384,14 @@ void toggleAnalog(uint8_t analog_id){
 			lcd_send_string(" ON");enabled=1;}
 		analog_3_enabled=!analog_3_enabled;
 	}
+
+	//sample rate cap
+	if(sample_rate<30||(analog_1_enabled && analog_2_enabled && analog_3_enabled && sample_rate > 3000/(log(PSC)/log(2)))||(((analog_1_enabled&&analog_2_enabled)||(analog_1_enabled&&analog_3_enabled)||(analog_2_enabled&&analog_3_enabled))&& sample_rate>5000/(log(PSC)/log(2)))||(sample_rate>10000/(log(PSC)/log(2)))){
+		sample_rate=(analog_1_enabled && analog_2_enabled && analog_3_enabled)?3000:((analog_1_enabled&&analog_2_enabled)||(analog_1_enabled&&analog_3_enabled)||(analog_2_enabled&&analog_3_enabled))?5000:10000;
+		sample_rate/=(log(PSC)/log(2));
+		setDelay();
+	}
+
 
 	//store the state in the menu
 	if(enabled){
@@ -1361,6 +1422,7 @@ void toggleAnalog(uint8_t analog_id){
 
 	//reset cursor on display
 	lcd_put_cur(0,0);
+
 }
 
 //display the analog values on the display

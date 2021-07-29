@@ -169,7 +169,7 @@ void HAL_SDADC_MspInit(SDADC_HandleTypeDef* hsdadc)
     HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
 
     /* SDADC1 interrupt Init */
-    HAL_NVIC_SetPriority(SDADC1_IRQn, 1, 0);
+    HAL_NVIC_SetPriority(SDADC1_IRQn, 2, 0);
     HAL_NVIC_EnableIRQ(SDADC1_IRQn);
   /* USER CODE BEGIN SDADC1_MspInit 1 */
 
@@ -193,7 +193,7 @@ void HAL_SDADC_MspInit(SDADC_HandleTypeDef* hsdadc)
     HAL_GPIO_Init(GPIOE, &GPIO_InitStruct);
 
     /* SDADC2 interrupt Init */
-    HAL_NVIC_SetPriority(SDADC2_IRQn, 1, 0);
+    HAL_NVIC_SetPriority(SDADC2_IRQn, 2, 0);
     HAL_NVIC_EnableIRQ(SDADC2_IRQn);
   /* USER CODE BEGIN SDADC2_MspInit 1 */
 
@@ -217,7 +217,7 @@ void HAL_SDADC_MspInit(SDADC_HandleTypeDef* hsdadc)
     HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
     /* SDADC3 interrupt Init */
-    HAL_NVIC_SetPriority(SDADC3_IRQn, 1, 0);
+    HAL_NVIC_SetPriority(SDADC3_IRQn, 2, 0);
     HAL_NVIC_EnableIRQ(SDADC3_IRQn);
   /* USER CODE BEGIN SDADC3_MspInit 1 */
 
